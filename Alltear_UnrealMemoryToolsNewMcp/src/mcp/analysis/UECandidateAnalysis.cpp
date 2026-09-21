@@ -308,6 +308,8 @@ bool DecodeNameAt(const KittyMemoryMgr &mgr, uintptr_t block, uint32_t offsetUni
             return false;
         }
         name.assign(bytes.begin(), bytes.end());
+        // [修复] UTF-8 安全化（无畏契约等魔改游戏解码出二进制字节）
+        name = UmtMcp::SanitizeUtf8(name);
     }
     else
     {
