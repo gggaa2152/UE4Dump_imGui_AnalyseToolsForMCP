@@ -26,6 +26,10 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
     case EK_MEM_OP_IO:
         _pMemOp = std::make_unique<KittyMemIO>();
         break;
+    case EK_MEM_OP_DRIVER:
+        // [v6] 内核驱动模式（/dev/TearGame）；驱动未加载时 init 失败，由调用方回退
+        _pMemOp = std::make_unique<KittyMemDriver>();
+        break;
     default:
         KITTY_LOGE("KittyMemoryMgr: Unknown memory operation.");
         return false;
