@@ -400,11 +400,16 @@ void ScanExact(const KittyMemoryMgr &mgr, const std::vector<ScanRange> &ranges,
 {
     if (needle.empty()) return;
     std::vector<uint8_t> buffer(kScanChunk + needle.size());
+    size_t progressCounter = 0;
     for (const auto &range : ranges)
     {
         for (uintptr_t cursor = range.start; cursor < range.end; cursor += kScanChunk)
         {
             if (cancelFlag && cancelFlag->load()) throw HandlerError(Err::kCancelled, "扫描已取消");
+            // [修复] 目标进程死亡立即中止，避免对死进程空转刷日志
+            if ((++progressCounter & 0x3F) == 0 &&
+                !IsProcessAlive(session.pid, session.processStartTime))
+                throw HandlerError(Err::kReadFailed, "目标进程已退出，扫描中止");
             const size_t primary = static_cast<size_t>(std::min<uintptr_t>(kScanChunk, range.end - cursor));
             const size_t overlap = std::min<size_t>(needle.size() - 1, range.end - cursor - primary);
             const size_t wanted = primary + overlap;
@@ -571,6 +576,19 @@ bool DecodeLiteral(uintptr_t pc, uint32_t insn, uintptr_t &literalAddress)
     literalAddress = static_cast<uintptr_t>(static_cast<int64_t>(pc) + offset);
     return true;
 }
+}
+
+// [修复] 扫描循环内的轻量存活检查：目标进程已退出时立即中止，
+// 避免对死进程持续 readMem 刷错误日志（真机实测：无此检查时单次扫描可产生
+// 90MB / 100 万行 "No process with ID" 日志，并让任务假装仍在运行）。
+// 从匿名 namespace 导出：UECandidateAnalysis.cpp 的扫描循环同样需要它。
+bool IsProcessAlive(pid_t pid, uint64_t expectedStartTime)
+{
+    if (pid <= 0) return false;
+    const uint64_t now = ReadProcessStartTime(pid);
+    if (now == 0) return false;
+    if (expectedStartTime != 0 && now != expectedStartTime) return false;  // pid 复用检测
+    return true;
 }
 
 MapSnapshot CaptureMaps(const KittyMemoryMgr &mgr)
@@ -903,12 +921,16 @@ json FindReferences(const json &args, const KittyMemoryMgr &mgr, const std::atom
                        WantsKind(kinds, "LITERAL_LOAD")))
     {
         std::vector<uint8_t> buffer(kScanChunk + 16);
+        size_t refProgressCounter = 0;
         for (const auto &range : ranges)
         {
             if (!range.map.executable) continue;
             for (uintptr_t cursor = range.start; cursor < range.end && !session.truncated; cursor += kScanChunk)
             {
                 if (cancelFlag && cancelFlag->load()) throw HandlerError(Err::kCancelled, "引用扫描已取消");
+                if ((++refProgressCounter & 0x3F) == 0 &&
+                    !IsProcessAlive(session.pid, session.processStartTime))
+                    throw HandlerError(Err::kReadFailed, "目标进程已退出，引用扫描中止");
                 const size_t primary = static_cast<size_t>(std::min<uintptr_t>(kScanChunk, range.end - cursor));
                 const size_t overlap = std::min<size_t>(16, range.end - cursor - primary);
                 const size_t got = mgr.readMem(cursor, buffer.data(), primary + overlap);
