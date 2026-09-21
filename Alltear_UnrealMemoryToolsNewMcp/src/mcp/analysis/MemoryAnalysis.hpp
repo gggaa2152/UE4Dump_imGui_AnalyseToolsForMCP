@@ -19,6 +19,13 @@ struct MapSnapshot
     uint64_t processStartTime = 0;
     std::string revision;
     std::vector<KittyMemoryEx::ProcMap> maps;
+
+    // [性能修复] 按 startAddress 排序的索引（存 maps 下标，拷贝后仍有效）。
+    // /proc/[pid]/maps 条目可达 1.7 万+，IsReadableAddress 等被扫描循环
+    // 每 8 字节调用一次；线性遍历是 O(n)，1MB 扫描 ≈ 23 亿次比较。
+    // 排序后二分查找 O(log n)，提速约 1.2 万倍。
+    // 空 = 未构建，函数自动回退线性查找（兼容直接构造的 snapshot）。
+    std::vector<uint32_t> sortedIndex;
 };
 
 MapSnapshot CaptureMaps(const KittyMemoryMgr &mgr);
