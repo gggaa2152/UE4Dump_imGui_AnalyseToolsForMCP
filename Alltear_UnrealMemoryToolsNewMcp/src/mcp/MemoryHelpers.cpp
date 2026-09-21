@@ -30,13 +30,20 @@ bool ParseAddress(const std::string &s, uintptr_t &out)
 
     std::string t = s;
     // 去掉 "0x" / "0X" 前缀
+    bool hadHexPrefix = false;
     if (t.size() >= 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X'))
+    {
         t = t.substr(2);
+        hadHexPrefix = true;
+    }
     if (t.empty())
         return false;
 
-    // 含字母 → 按十六进制；否则按十进制（地址通常带 0x 或纯 hex，纯数字十进制兜底）
-    const int base = HasHexLetter(t) ? 16 : 10;
+    // [修复] 0x 前缀是明确的十六进制标记，必须优先按 16 进制解析。
+    // 原实现只看"是否含字母"，导致 0x7730008000 这类纯数字十六进制地址
+    // 被按十进制解析成 0x1ccbe8fc0（7730008000），读取全部失败。
+    // 规则：有 0x 前缀 → 16 进制；无前缀含字母 → 16 进制；无前缀纯数字 → 10 进制兜底。
+    const int base = (hadHexPrefix || HasHexLetter(t)) ? 16 : 10;
     try
     {
         out = static_cast<uintptr_t>(std::stoull(t, nullptr, base));
@@ -81,7 +88,14 @@ bool ParseOffset(const std::string &s, ParsedOffset &out)
     if (t.empty())
         return false;
 
-    const int base = HasHexLetter(t) ? 16 : 10;
+    // [修复] 同 ParseAddress：0x 前缀优先按 16 进制（含 "-0x10" 负偏移场景）
+    bool offHexPrefix = false;
+    {
+        const std::string body = (!t.empty() && t[0] == '-') ? t.substr(1) : t;
+        if (body.size() >= 2 && body[0] == '0' && (body[1] == 'x' || body[1] == 'X'))
+            offHexPrefix = true;
+    }
+    const int base = (offHexPrefix || HasHexLetter(t)) ? 16 : 10;
     try
     {
         out.offset = std::stoll(t, nullptr, base);
