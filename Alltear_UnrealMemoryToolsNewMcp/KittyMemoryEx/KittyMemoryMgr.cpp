@@ -1,5 +1,6 @@
 #include "KittyMemoryMgr.hpp"
 #include "zip/zip.h"
+#include <cstdio>
 
 bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch)
 {
