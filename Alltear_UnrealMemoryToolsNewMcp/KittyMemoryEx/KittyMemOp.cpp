@@ -306,7 +306,11 @@ bool KittyMemDriver::init(pid_t pid)
 size_t KittyMemDriver::Read(uintptr_t address, void *buffer, size_t len) const
 {
     if (_fd < 0 || _pid < 1 || !address || !buffer || !len)
+    {
+        KITTY_LOGE("KittyMemDriver::Read bad args: fd=%d pid=%d addr=%p buf=%p len=%zu",
+                   _fd, (int)_pid, (void*)address, buffer, len);
         return 0;
+    }
 
     size_t done = 0;
     while (done < len)
@@ -318,13 +322,18 @@ size_t KittyMemDriver::Read(uintptr_t address, void *buffer, size_t len) const
         cm.buffer = static_cast<char *>(buffer) + done;
         cm.size = chunk;
 
-        if (::ioctl(_fd, kOpReadMem, &cm) != 0)
+        errno = 0;
+        const int rc = ::ioctl(_fd, kOpReadMem, &cm);
+        if (rc != 0)
         {
-            // 部分读取：返回已完成字节数（与 process_vm_readv 语义一致）
+            KITTY_LOGE("KittyMemDriver::Read ioctl failed: rc=%d errno=%d (%s) pid=%d addr=0x%lx size=%zu",
+                       rc, errno, strerror(errno), (int)_pid, (unsigned long)(address + done), chunk);
             break;
         }
         done += chunk;
     }
+    if (done > 0 && done < len)
+        KITTY_LOGW("KittyMemDriver::Read partial: %zu/%zu", done, len);
     return done;
 }
 
