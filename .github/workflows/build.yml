@@ -1,0 +1,62 @@
+name: Build UnrealMemoryTools (arm64-v8a)
+
+on:
+  push:
+    branches: [tearue4mcp, main]
+    paths:
+      - 'Alltear_UnrealMemoryToolsNewMcp/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/android-ndk-r27d
+          key: ndk-r27d-linux
+
+      - name: Install NDK r27d
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r27d-linux.zip -O /tmp/ndk.zip
+          sudo unzip -q /tmp/ndk.zip -d /opt
+          ls /opt/android-ndk-r27d/build/cmake/android.toolchain.cmake
+
+      - name: Install cmake + ninja
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build
+
+      - name: Configure (CMake + Ninja)
+        working-directory: Alltear_UnrealMemoryToolsNewMcp
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_MAKE_PROGRAM=$(which ninja) \
+            -DNDK_PATH=/opt/android-ndk-r27d \
+            -DUMT_GHIDRA=ON
+
+      - name: Build
+        working-directory: Alltear_UnrealMemoryToolsNewMcp
+        run: cmake --build build 2>&1 | tail -100
+
+      - name: Verify output
+        working-directory: Alltear_UnrealMemoryToolsNewMcp
+        run: |
+          ls -la outputs/arm64-v8a/
+          file outputs/arm64-v8a/UnrealMemoryTools || true
+          sha256sum outputs/arm64-v8a/UnrealMemoryTools || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnrealMemoryTools-arm64-v8a
+          path: Alltear_UnrealMemoryToolsNewMcp/outputs/arm64-v8a/UnrealMemoryTools
+          if-no-files-found: error
