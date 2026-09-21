@@ -303,6 +303,27 @@ bool KittyMemDriver::init(pid_t pid)
     return true;
 }
 
+// [v8] 单块读取（无降级），成功返回 true
+bool KittyMemDriver::ReadChunk(uintptr_t address, void *buffer, size_t len, bool quiet) const
+{
+    CopyMemory cm;
+    cm.pid = _pid;
+    cm.addr = address;
+    cm.buffer = buffer;
+    cm.size = len;
+
+    errno = 0;
+    const int rc = ::ioctl(_fd, kOpReadMem, &cm);
+    if (rc != 0)
+    {
+        if (!quiet)
+            KITTY_LOGD("KittyMemDriver::ReadChunk ioctl failed: errno=%d (%s) pid=%d addr=0x%lx size=%zu",
+                       errno, strerror(errno), (int)_pid, (unsigned long)address, len);
+        return false;
+    }
+    return true;
+}
+
 size_t KittyMemDriver::Read(uintptr_t address, void *buffer, size_t len) const
 {
     if (_fd < 0 || _pid < 1 || !address || !buffer || !len)
@@ -316,24 +337,37 @@ size_t KittyMemDriver::Read(uintptr_t address, void *buffer, size_t len) const
     while (done < len)
     {
         const size_t chunk = std::min(kMaxChunk, len - done);
-        CopyMemory cm;
-        cm.pid = _pid;
-        cm.addr = address + done;
-        cm.buffer = static_cast<char *>(buffer) + done;
-        cm.size = chunk;
+        const uintptr_t cur = address + done;
+        char *dst = static_cast<char *>(buffer) + done;
 
-        errno = 0;
-        const int rc = ::ioctl(_fd, kOpReadMem, &cm);
-        if (rc != 0)
+        // [v8] 自适应分块：内核驱动是 all-or-nothing 语义（范围含任一不可读页即失败），
+        // 扫描场景经常按 1MB 块读取跨映射边界的区域。策略：
+        //   1MB 失败 → 256KB → 64KB → 16KB → 4KB（页级）
+        // 每级失败即降级，页级仍失败则跳过该页（保持与 process_vm_readv 相近的容错性）。
+        static constexpr size_t kLadder[] = {1024 * 1024, 256 * 1024, 64 * 1024, 16 * 1024, 4096};
+        bool ok = false;
+        for (size_t trySize : kLadder)
         {
-            KITTY_LOGE("KittyMemDriver::Read ioctl failed: rc=%d errno=%d (%s) pid=%d addr=0x%lx size=%zu",
-                       rc, errno, strerror(errno), (int)_pid, (unsigned long)(address + done), chunk);
-            break;
+            const size_t cur_chunk = std::min(chunk, trySize);
+            if (cur_chunk == 0) continue;
+            if (ReadChunk(cur, dst, cur_chunk, true))
+            {
+                done += cur_chunk;
+                ok = true;
+                break;
+            }
+            if (trySize == 4096)
+            {
+                // 页级也失败：该页不可读（未映射/权限不足），跳过整页
+                // 与 process_vm_readv 部分读取语义对齐：不中断，继续后续地址
+                done += 4096;
+                ok = true;
+                break;
+            }
         }
-        done += chunk;
+        if (!ok)
+            break;
     }
-    if (done > 0 && done < len)
-        KITTY_LOGW("KittyMemDriver::Read partial: %zu/%zu", done, len);
     return done;
 }
 
