@@ -912,7 +912,10 @@ namespace
 
         SetDumpPhase("初始化内存");
         LOGI("正在初始化内存...");
-        if (!kMgr.initialize(candidate.pid, EK_MEM_OP_SYSCALL, false) &&
+        // [v6] 优先尝试内核驱动模式（/dev/TearGame，无 process_vm_readv 痕迹），
+        // 未加载驱动时回退 SYSCALL / IO
+        if (!kMgr.initialize(candidate.pid, EK_MEM_OP_DRIVER, false) &&
+            !kMgr.initialize(candidate.pid, EK_MEM_OP_SYSCALL, false) &&
             !kMgr.initialize(candidate.pid, EK_MEM_OP_IO, false))
         {
             LOGE("初始化 KittyMemoryMgr 失败。");
@@ -2531,7 +2534,9 @@ namespace
                 if (gSelectedIndex < 0 || gSelectedIndex >= static_cast<int>(gCandidates.size()))
                     throw UmtMcp::HandlerError(UmtMcp::Err::kBadArgs, "请先 SELECT_PROCESS 选定目标进程");
                 const auto &c = gCandidates[gSelectedIndex];
-                const bool ok = UEMemory::kMgr.initialize(c.pid, EK_MEM_OP_SYSCALL, false) ||
+                // [v6] 优先内核驱动模式，未加载时回退 SYSCALL / IO
+                const bool ok = UEMemory::kMgr.initialize(c.pid, EK_MEM_OP_DRIVER, false) ||
+                                UEMemory::kMgr.initialize(c.pid, EK_MEM_OP_SYSCALL, false) ||
                                 UEMemory::kMgr.initialize(c.pid, EK_MEM_OP_IO, false);
                 const auto snapshot = ok ? UmtMcp::Analysis::CaptureMaps(UEMemory::kMgr)
                                          : UmtMcp::Analysis::MapSnapshot{};
