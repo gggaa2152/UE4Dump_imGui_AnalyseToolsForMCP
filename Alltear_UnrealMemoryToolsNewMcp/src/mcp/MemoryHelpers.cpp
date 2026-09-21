@@ -129,6 +129,50 @@ std::string BytesToHex(const uint8_t *data, size_t len)
     return out;
 }
 
+// [修复] UTF-8 安全化：非法字节序列替换为 '?'（见头文件说明）
+std::string SanitizeUtf8(const std::string &in)
+{
+    std::string out;
+    out.reserve(in.size());
+    size_t i = 0;
+    while (i < in.size())
+    {
+        const unsigned char c = static_cast<unsigned char>(in[i]);
+        size_t seqLen = 0;
+        if (c < 0x80) seqLen = 1;
+        else if ((c & 0xE0) == 0xC0) seqLen = 2;
+        else if ((c & 0xF0) == 0xE0) seqLen = 3;
+        else if ((c & 0xF8) == 0xF0) seqLen = 4;
+        else { out.push_back('?'); ++i; continue; }
+
+        if (i + seqLen > in.size()) { out.push_back('?'); ++i; continue; }
+
+        bool ok = true;
+        for (size_t k = 1; k < seqLen; ++k)
+            if ((static_cast<unsigned char>(in[i + k]) & 0xC0) != 0x80) { ok = false; break; }
+
+        if (ok)
+        {
+            unsigned int cp = 0;
+            if (seqLen == 1) cp = c;
+            else if (seqLen == 2) cp = c & 0x1F;
+            else if (seqLen == 3) cp = c & 0x0F;
+            else cp = c & 0x07;
+            for (size_t k = 1; k < seqLen; ++k)
+                cp = (cp << 6) | (static_cast<unsigned char>(in[i + k]) & 0x3F);
+
+            if ((seqLen == 2 && cp < 0x80) || (seqLen == 3 && cp < 0x800) ||
+                (seqLen == 4 && cp < 0x10000) || cp > 0x10FFFF ||
+                (cp >= 0xD800 && cp <= 0xDFFF))
+                ok = false;
+        }
+
+        if (ok) { out.append(in, i, seqLen); i += seqLen; }
+        else { out.push_back('?'); ++i; }
+    }
+    return out;
+}
+
 size_t ValueTypeSize(const std::string &type)
 {
     if (type == "bool" || type == "i8" || type == "u8")
