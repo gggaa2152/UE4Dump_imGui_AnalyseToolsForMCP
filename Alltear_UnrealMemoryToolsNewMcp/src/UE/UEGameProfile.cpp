@@ -1,4 +1,5 @@
 #include "UEGameProfile.hpp"
+#include "../mcp/MemoryHelpers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -842,6 +843,9 @@ uint8_t *IGameProfile::GetNameEntry(int32_t id) const
     return (chunck + chunck_offset);
 }
 
+// [修复] UTF-8 安全化使用 UmtMcp::SanitizeUtf8（定义在 MemoryHelpers.cpp）。
+// 原本地实现已移除，避免重复定义。
+
 std::string IGameProfile::GetNameEntryString(uint8_t *entry) const
 {
     if (!entry)
@@ -903,7 +907,8 @@ std::string IGameProfile::GetNameEntryString(uint8_t *entry) const
     if (strNumber > 0)
         result += '_' + std::to_string(strNumber - 1);
 
-    return result;
+    // [修复] UTF-8 安全化，避免 nlohmann::json 序列化崩溃（type_error.316）
+    return UmtMcp::SanitizeUtf8(result);
 }
 
 std::string IGameProfile::GetNameByID(int32_t id) const
