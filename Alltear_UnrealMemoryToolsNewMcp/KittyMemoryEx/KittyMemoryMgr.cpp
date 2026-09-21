@@ -30,6 +30,30 @@ bool KittyMemoryMgr::initialize(pid_t pid, EKittyMemOP eMemOp, bool initMemPatch
         // [v6] 内核驱动模式（/dev/TearGame）；驱动未加载时 init 失败，由调用方回退
         _pMemOp = std::make_unique<KittyMemDriver>();
         break;
+    case EK_MEM_OP_KPM:
+    {
+        // [v9] KPM 物理内存模式（APatch/KernelPatch kpm_kread）
+        // 密钥从 /data/local/tmp/umt/kpm_key.txt 读取（格式: key_hex cmd_hex）
+        auto kpmOp = std::make_unique<KittyMemKPM>();
+        uint64_t key = 0;
+        uint32_t cmd = 0;
+        FILE *kf = fopen("/data/local/tmp/umt/kpm_key.txt", "r");
+        if (kf)
+        {
+            if (fscanf(kf, "%llx %x", (unsigned long long *)&key, &cmd) != 2)
+            {
+                KITTY_LOGE("KittyMemoryMgr: kpm_key.txt parse failed.");
+            }
+            fclose(kf);
+        }
+        else
+        {
+            KITTY_LOGW("KittyMemoryMgr: kpm_key.txt not found, KPM key unset.");
+        }
+        kpmOp->setKey(key, cmd);
+        _pMemOp = std::move(kpmOp);
+        break;
+    }
     default:
         KITTY_LOGE("KittyMemoryMgr: Unknown memory operation.");
         return false;
