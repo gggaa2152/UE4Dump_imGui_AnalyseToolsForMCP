@@ -114,10 +114,13 @@ std::string HashFile(const std::string &path)
     std::ifstream input(path, std::ios::binary);
     if (!input) return {};
     Sha256 hash;
-    std::array<uint8_t, 1024 * 1024> buffer{};
+    // [修复] 原实现用 std::array<uint8_t, 1MB> 栈数组——在 dump worker 线程
+    // （默认栈 1MB）中直接撑爆栈 → SIGSEGV(SEGV_ACCERR) 崩溃。
+    // 改为堆分配（std::vector），并在读取循环内复用。
+    std::vector<uint8_t> buffer(1024 * 1024);
     while (input)
     {
-        input.read(reinterpret_cast<char *>(buffer.data()), buffer.size());
+        input.read(reinterpret_cast<char *>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
         const std::streamsize got = input.gcount();
         if (got > 0) hash.Update(buffer.data(), static_cast<size_t>(got));
     }
