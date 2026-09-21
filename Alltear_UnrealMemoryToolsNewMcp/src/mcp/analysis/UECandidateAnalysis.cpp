@@ -597,11 +597,15 @@ json ScanGNamesCandidates(const json &args, const KittyMemoryMgr &mgr, const std
     size_t scanned = 0, skipped = 0;
     bool truncated = false;
     std::vector<uint8_t> buffer(kChunk);
+    size_t progressCounter = 0;
     for (const auto &map : maps)
     {
         for (uintptr_t cursor = map.startAddress; cursor < map.endAddress && scanned < budget; cursor += kChunk)
         {
             if (cancelFlag && cancelFlag->load()) throw HandlerError(Err::kCancelled, "FNamePool 候选扫描已取消");
+            // [修复] 目标进程死亡立即中止，避免对死进程空转刷日志
+            if ((++progressCounter & 0x3F) == 0 && !IsProcessAlive(session.pid, session.processStartTime))
+                throw HandlerError(Err::kReadFailed, "目标进程已退出，FNamePool 候选扫描中止");
             const size_t size = std::min<size_t>(kChunk, map.endAddress - cursor);
             const size_t got = mgr.readMem(cursor, buffer.data(), size);
             if (got < sizeof(uintptr_t)) { skipped += size; continue; }
@@ -748,6 +752,7 @@ json ScanObjectCandidates(const json &args, const KittyMemoryMgr &mgr, const std
     bool truncated = false;
     std::unordered_set<std::string> seen;
     std::vector<uint8_t> buffer(kChunk + 0x500);
+    size_t objProgressCounter = 0;
     for (const auto &map : maps)
     {
         const uintptr_t mapStart = std::max(static_cast<uintptr_t>(map.startAddress), directionalStart);
@@ -757,6 +762,8 @@ json ScanObjectCandidates(const json &args, const KittyMemoryMgr &mgr, const std
         {
             if (cancelFlag && cancelFlag->load())
                 throw HandlerError(Err::kCancelled, "GUObjectArray 候选扫描已取消");
+            if ((++objProgressCounter & 0x3F) == 0 && !IsProcessAlive(session.pid, session.processStartTime))
+                throw HandlerError(Err::kReadFailed, "目标进程已退出，GUObjectArray 候选扫描中止");
             const size_t primary = std::min<size_t>(kChunk, mapEnd - cursor);
             const size_t overlap = std::min<size_t>(0x500, mapEnd - cursor - primary);
             const size_t got = mgr.readMem(cursor, buffer.data(), primary + overlap);
