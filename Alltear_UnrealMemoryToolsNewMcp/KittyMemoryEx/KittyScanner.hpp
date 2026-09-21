@@ -169,8 +169,15 @@ public:
 
     inline bool isValid() const
     {
-        return _elfBase && _loadSize && _phdr && _dynamic && _loadBias && _stringTable && _symbolTable;
+        // [修复] 放宽判定：部分游戏（无畏契约）的 libUE4.so 被裁剪了 PT_DYNAMIC
+        // 内容（首个条目即 DT_NULL），导致 _stringTable/_symbolTable 为 0。
+        // 原条件要求符号表齐全 → 整个 ELF 判定无效 → dump/查找功能全部失败。
+        // 新条件：只要 ELF 头 + 程序头 + load 信息有效即可（符号表缺失只影响符号解析）。
+        return _elfBase && _loadSize && _phdr && _loadBias;
     }
+
+    // [修复] 符号表是否可用（dump 等场景不需要）
+    inline bool hasSymbols() const { return _stringTable && _symbolTable; }
 
     inline bool isHeaderless() const { return _headerless; }
 
