@@ -188,6 +188,19 @@ uintptr_t ModuleBaseFor(const MapSnapshot &snapshot, const KittyMemoryEx::ProcMa
 
 const KittyMemoryEx::ProcMap *FindMap(const MapSnapshot &snapshot, uintptr_t address)
 {
+    // [性能修复] 二分查找（有索引时）
+    if (!snapshot.sortedIndex.empty())
+    {
+        auto it = std::upper_bound(
+            snapshot.sortedIndex.begin(), snapshot.sortedIndex.end(), address,
+            [&snapshot](uintptr_t addr, uint32_t idx) {
+                return addr < snapshot.maps[idx].startAddress;
+            });
+        if (it == snapshot.sortedIndex.begin()) return nullptr;
+        --it;
+        const auto &map = snapshot.maps[*it];
+        return map.contains(address) ? &map : nullptr;
+    }
     for (const auto &map : snapshot.maps)
         if (map.contains(address)) return &map;
     return nullptr;
@@ -245,6 +258,22 @@ size_t ParseCursor(const json &args)
 std::vector<ScanRange> SelectRanges(const json &args, const MapSnapshot &snapshot,
                                     const char *permissionKey, bool requireScope)
 {
+    // [性能修复] 预构建 pathname → moduleBase 缓存。
+    // 原实现：对每个 map 调用 ModuleBaseFor，每次线性遍历全部 maps（O(n²)，
+    // 1.7 万 maps 时 ≈ 3 亿次字符串比较）。改为一次 O(n) 构建 + O(1) 查询。
+    std::unordered_map<std::string, uintptr_t> moduleBaseCache;
+    moduleBaseCache.reserve(snapshot.maps.size());
+    for (const auto &m0 : snapshot.maps)
+    {
+        if (m0.pathname.empty()) continue;
+        auto it0 = moduleBaseCache.find(m0.pathname);
+        const uintptr_t s0 = static_cast<uintptr_t>(m0.startAddress);
+        if (it0 == moduleBaseCache.end())
+            moduleBaseCache.emplace(m0.pathname, s0);
+        else if (m0.offset == 0)
+            it0->second = std::min(it0->second, s0);
+    }
+
     const std::string module = args.value("module", "");
     const json mapIds = args.value("mapIds", json::array());
     const bool hasMapIds = mapIds.is_array() && !mapIds.empty();
@@ -295,7 +324,12 @@ std::vector<ScanRange> SelectRanges(const json &args, const MapSnapshot &snapsho
             end = std::min(end, requestedEnd);
             if (end <= start) continue;
         }
-        out.push_back({start, end, map, ModuleBaseFor(snapshot, map)});
+        {
+            uintptr_t mb = 0;
+            auto itb = moduleBaseCache.find(map.pathname);
+            if (itb != moduleBaseCache.end()) mb = itb->second;
+            out.push_back({start, end, map, mb});
+        }
     }
 
     if (out.empty())
@@ -635,6 +669,16 @@ MapSnapshot CaptureMaps(const KittyMemoryMgr &mgr)
         hash = FnvString(hash, perms);
     }
     snapshot.revision = std::to_string(snapshot.pid) + ":" + Hex(hash);
+
+    // [性能修复] 构建按 startAddress 排序的索引（供 IsReadableAddress 等二分查找）。
+    // 只排序下标数组，不动原 maps 顺序（revision 哈希依赖原顺序）。
+    snapshot.sortedIndex.resize(snapshot.maps.size());
+    for (uint32_t i = 0; i < snapshot.maps.size(); ++i)
+        snapshot.sortedIndex[i] = i;
+    std::sort(snapshot.sortedIndex.begin(), snapshot.sortedIndex.end(),
+              [&snapshot](uint32_t a, uint32_t b) {
+                  return snapshot.maps[a].startAddress < snapshot.maps[b].startAddress;
+              });
     return snapshot;
 }
 
@@ -646,6 +690,26 @@ std::string CurrentMapRevision(const KittyMemoryMgr &mgr)
 bool IsReadableAddress(const MapSnapshot &snapshot, uintptr_t address, size_t size)
 {
     if (size == 0) return false;
+
+    // [性能修复] 有排序索引时二分查找 O(log n)；无索引回退线性（兼容直接构造的 snapshot）
+    if (!snapshot.sortedIndex.empty())
+    {
+        // upper_bound: 找第一个 startAddress > address 的位置，前一个即候选 map
+        auto it = std::upper_bound(
+            snapshot.sortedIndex.begin(), snapshot.sortedIndex.end(), address,
+            [&snapshot](uintptr_t addr, uint32_t idx) {
+                return addr < snapshot.maps[idx].startAddress;
+            });
+        if (it == snapshot.sortedIndex.begin()) return false;
+        --it;
+        const auto &map = snapshot.maps[*it];
+        if (map.readable && address >= map.startAddress && address < map.endAddress &&
+            size <= map.endAddress - address)
+            return true;
+        // maps 理论上有序不重叠；此处直接返回，防御性处理交给回退分支
+        return false;
+    }
+
     for (const auto &map : snapshot.maps)
         if (map.readable && address >= map.startAddress && address < map.endAddress &&
             size <= map.endAddress - address)
@@ -656,6 +720,22 @@ bool IsReadableAddress(const MapSnapshot &snapshot, uintptr_t address, size_t si
 bool IsWritableAddress(const MapSnapshot &snapshot, uintptr_t address, size_t size)
 {
     if (size == 0) return false;
+
+    // [性能修复] 同上：二分查找 + 回退
+    if (!snapshot.sortedIndex.empty())
+    {
+        auto it = std::upper_bound(
+            snapshot.sortedIndex.begin(), snapshot.sortedIndex.end(), address,
+            [&snapshot](uintptr_t addr, uint32_t idx) {
+                return addr < snapshot.maps[idx].startAddress;
+            });
+        if (it == snapshot.sortedIndex.begin()) return false;
+        --it;
+        const auto &map = snapshot.maps[*it];
+        return map.writeable && address >= map.startAddress && address < map.endAddress &&
+               size <= map.endAddress - address;
+    }
+
     for (const auto &map : snapshot.maps)
         if (map.writeable && address >= map.startAddress && address < map.endAddress &&
             size <= map.endAddress - address)
