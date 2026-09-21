@@ -584,24 +584,30 @@ MapSnapshot CaptureMaps(const KittyMemoryMgr &mgr)
     hash = Fnv1a(hash, &snapshot.processStartTime, sizeof(snapshot.processStartTime));
     for (const auto &map : snapshot.maps)
     {
-        // [修复 E_MAP_STALE] 跳过高频变化的 GPU/图形与匿名堆映射：
-        // 游戏运行时 /dev/kgsl-3d0、dmabuf 映射与匿名可写段每秒都在增删/分裂，
-        // 把它们算进 revision 会让长时间扫描（scanGnames/scanObjects/scanPattern/
-        // searchMemory/findReferences 等）必然在结束校验时报 E_MAP_STALE 并丢弃全部结果。
-        // revision 只覆盖与 UE 引擎定位相关的稳定映射（文件映射 + 可执行段）。
+        // [修复 E_MAP_STALE] revision 只覆盖与 UE 引擎定位相关的稳定映射。
+        // 游戏运行时以下映射每秒都在增删/分裂/换 inode，把它们算进 revision 会让
+        // scanGnames / scanObjects / scanPattern / searchMemory / findReferences 等
+        // 长扫描在结束校验时必然报 E_MAP_STALE 并丢弃全部结果（真机验证：
+        // 10 个连续快照全量 md5 均不同；过滤后 revision 稳定一致）：
+        //   1) /dev/kgsl-*、dmabuf、mali、/dev/dri —— GPU/显示驱动映射
+        //   2) rw-s 共享可写段（ashmem、游戏临时文件等）
+        //   3) ---p 保护段（线程栈 guard page）
+        //   4) 匿名段（[anon:*] 与无路径名堆栈）
+        // 地址有效性判断仍使用完整 maps 列表（IsReadableAddress 等），不受影响。
+        if (map.is_shared)
+            continue;
         const std::string &path = map.pathname;
         if (path.find("dmabuf") != std::string::npos ||
             path.find("kgsl") != std::string::npos ||
             path.find("mali") != std::string::npos ||
             path.find("/dev/dri") != std::string::npos)
             continue;
-        if (path.rfind("/dev/", 0) == 0 && path.find("ashmem") == std::string::npos)
+        if (!map.readable && !map.writeable && !map.executable)
             continue;
-        if (map.writeable && !map.executable)
-        {
-            if (path.empty() || path.rfind("[anon:", 0) == 0)
-                continue;
-        }
+        if (path.empty() || path.front() == '[')
+            continue;
+        if (map.writeable && !map.executable && path.rfind("/dev/", 0) == 0)
+            continue;
         hash = Fnv1a(hash, &map.startAddress, sizeof(map.startAddress));
         hash = Fnv1a(hash, &map.endAddress, sizeof(map.endAddress));
         hash = Fnv1a(hash, &map.offset, sizeof(map.offset));
