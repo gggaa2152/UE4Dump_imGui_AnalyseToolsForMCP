@@ -1,6 +1,12 @@
 #include "KittyMemOp.hpp"
 #include <cerrno>
 
+// [v6] 内核驱动模式需要的头文件
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <cstring>
+
 // process_vm_readv & process_vm_writev
 #if defined(__aarch64__)
 #define syscall_rpmv_n 270
@@ -254,4 +260,92 @@ size_t KittyMemIO::Write(uintptr_t address, void *buffer, size_t len) const
 
     ssize_t bytes = _pMem->Write(address, buffer, len);
     return bytes > 0 ? bytes : 0;
+}
+
+/* =================== KittyMemDriver（[v6] TearGame 内核驱动） =================== */
+
+// 驱动设备节点（泪心开源驱动默认值）
+static constexpr const char *kDriverDevicePath = "/dev/TearGame";
+
+KittyMemDriver::~KittyMemDriver()
+{
+    if (_fd >= 0)
+    {
+        ::close(_fd);
+        _fd = -1;
+    }
+}
+
+bool KittyMemDriver::init(pid_t pid)
+{
+    if (pid < 1)
+    {
+        KITTY_LOGE("KittyMemDriver: Invalid PID.");
+        return false;
+    }
+
+    if (_fd >= 0)
+    {
+        ::close(_fd);
+        _fd = -1;
+    }
+
+    _fd = ::open(kDriverDevicePath, O_RDWR);
+    if (_fd < 0)
+    {
+        KITTY_LOGW("KittyMemDriver: %s not available (errno=%d), fallback expected.",
+                   kDriverDevicePath, errno);
+        return false;
+    }
+
+    _pid = pid;
+    KITTY_LOGI("KittyMemDriver: attached to pid %d via %s", pid, kDriverDevicePath);
+    return true;
+}
+
+size_t KittyMemDriver::Read(uintptr_t address, void *buffer, size_t len) const
+{
+    if (_fd < 0 || _pid < 1 || !address || !buffer || !len)
+        return 0;
+
+    size_t done = 0;
+    while (done < len)
+    {
+        const size_t chunk = std::min(kMaxChunk, len - done);
+        CopyMemory cm;
+        cm.pid = _pid;
+        cm.addr = address + done;
+        cm.buffer = static_cast<char *>(buffer) + done;
+        cm.size = chunk;
+
+        if (::ioctl(_fd, kOpReadMem, &cm) != 0)
+        {
+            // 部分读取：返回已完成字节数（与 process_vm_readv 语义一致）
+            break;
+        }
+        done += chunk;
+    }
+    return done;
+}
+
+size_t KittyMemDriver::Write(uintptr_t address, void *buffer, size_t len) const
+{
+    if (_fd < 0 || _pid < 1 || !address || !buffer || !len)
+        return 0;
+
+    size_t done = 0;
+    while (done < len)
+    {
+        const size_t chunk = std::min(kMaxChunk, len - done);
+        CopyMemory cm;
+        cm.pid = _pid;
+        cm.addr = address + done;
+        cm.buffer = static_cast<char *>(buffer) + done;
+        cm.size = chunk;
+
+        if (::ioctl(_fd, kOpWriteMem, &cm) != 0)
+            break;
+        done += chunk;
+    }
+    return done;
 }
