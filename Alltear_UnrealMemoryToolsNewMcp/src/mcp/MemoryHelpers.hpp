@@ -44,6 +44,12 @@ std::string FormatAddress(uintptr_t addr);
 // 字节序列转大写十六进制串（每字节两位，无分隔），用于内存/值回显。
 std::string BytesToHex(const uint8_t *data, size_t len);
 
+// [修复] UTF-8 安全化：非法字节序列替换为 '?'。
+// 背景：魔改游戏（无畏契约等）的 FName 解码结果可能含二进制字节，
+// 直接进入 nlohmann::json 序列化会抛 type_error.316 导致设备端进程崩溃。
+// 所有把"内存读出的字符串"放进 JSON 的路径都必须先过这里。
+std::string SanitizeUtf8(const std::string &in);
+
 // 取值类型名 → 字节大小；未知类型返回 0（handler 据此报 E_BAD_ARGS）。
 // 支持：bool/i8/u8/i16/u16/i32/u32/i64/u64/f32/f64/ptr32/ptr64
 size_t ValueTypeSize(const std::string &type);
