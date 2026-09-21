@@ -385,13 +385,24 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, uintptr_t elfBase)
         }
     }
 
-    // check required dynamics for symbol lookup
-    if (!_elfBase || !_loadSize || !_phdr || !_dynamic || !_loadBias || !_stringTable || !_symbolTable)
+    // [修复] 放宽 dynamic 检查：部分游戏（无畏契约）的 libUE4.so 被裁剪了
+    // PT_DYNAMIC 内容（首个条目即 DT_NULL），符号表缺失。
+    // 原逻辑直接 return → segments 不填充 → dump/查找全部失败。
+    // 新逻辑：核心字段（ELF头/程序头/load信息）有效即可继续；
+    // 符号表缺失只影响 findSymbol，不影响 dump 与地址扫描。
+    if (!_elfBase || !_loadSize || !_phdr || !_loadBias)
     {
-        KITTY_LOGD("ElfScanner: Failed to require dynamics for symbol lookup.");
-        KITTY_LOGD("ElfScanner: elfBase: %p | bias: %p | phdr: %p | dyn: %p | strtab=%p | symtab=%p | strsz=%p | syment=%p",
-                   (void *)_elfBase, (void *)_loadBias, (void *)_phdr, (void *)_dynamic, (void *)_stringTable, (void *)_symbolTable, (void *)_strsz, (void *)_syment);
+        KITTY_LOGD("ElfScanner: Failed to require core ELF info.");
+        KITTY_LOGD("ElfScanner: elfBase: %p | bias: %p | phdr: %p | dyn: %p | strtab=%p | symtab=%p",
+                   (void *)_elfBase, (void *)_loadBias, (void *)_phdr, (void *)_dynamic, (void *)_stringTable, (void *)_symbolTable);
         return;
+    }
+
+    if (!_dynamic || !_stringTable || !_symbolTable)
+    {
+        // 符号表缺失：记录但不中断（dump 场景不需要符号表）
+        KITTY_LOGD("ElfScanner: ELF (%p) lacks dynamic symbol info (stripped?), continuing without symbols.",
+                   (void *)elfBase);
     }
 
     auto fix_table_address = [&](uintptr_t &table_addr)
@@ -498,11 +509,12 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, const soinfo_info_t &soinfo)
     _realpath = soinfo.realpath;
 
     bool isLinker = KittyUtils::String::EndsWith(soinfo.path, "/linker") || KittyUtils::String::EndsWith(soinfo.path, "/linker64");
-    if ((!isLinker && (_elfBase == 0 || _loadSize == 0)) ||  _loadBias == 0 || _phdr == 0 || _dynamic == 0 || _stringTable == 0 || _symbolTable == 0)
+    // [修复] 与第一个构造函数同步放宽：符号表缺失不再中断（dump 场景不需要）
+    if ((!isLinker && (_elfBase == 0 || _loadSize == 0)) || _loadBias == 0 || _phdr == 0)
     {
-        KITTY_LOGD("ElfScanner: Failed to require dynamics for symbol lookup");
-        KITTY_LOGD("ElfScanner: elfBase: %p | bias: %p | phdr: %p | dyn: %p | strtab=%p | symtab=%p | strsz=%p | syment=%p",
-                   (void *)_elfBase, (void *)_loadBias, (void *)_phdr, (void *)_dynamic, (void *)_stringTable, (void *)_symbolTable, (void *)_strsz, (void *)_syment);
+        KITTY_LOGD("ElfScanner: Failed to require core ELF info (soinfo)");
+        KITTY_LOGD("ElfScanner: elfBase: %p | bias: %p | phdr: %p | dyn: %p | strtab=%p | symtab=%p",
+                   (void *)_elfBase, (void *)_loadBias, (void *)_phdr, (void *)_dynamic, (void *)_stringTable, (void *)_symbolTable);
         return;
     }
 
@@ -687,11 +699,10 @@ ElfScanner::ElfScanner(IKittyMemOp *pMem, const soinfo_info_t &soinfo)
         }
     }
 
-    if (!_elfBase || !_loadSize || !_phdr || !_dynamic || !_loadBias || !_stringTable || !_symbolTable)
+    // [修复] 与主构造函数同步：核心信息有效即可
+    if (!_elfBase || !_loadSize || !_phdr || !_loadBias)
     {
-        KITTY_LOGD("ElfScanner: Failed to require dynamics for symbol lookup.");
-        KITTY_LOGD("ElfScanner: elfBase: %p | bias: %p | phdr: %p | dyn: %p | strtab=%p | symtab=%p | strsz=%p | syment=%p",
-                   (void *)_elfBase, (void *)_loadBias, (void *)_phdr, (void *)_dynamic, (void *)_stringTable, (void *)_symbolTable, (void *)_strsz, (void *)_syment);
+        KITTY_LOGD("ElfScanner: Failed to require core ELF info.");
     }
 }
 #endif
