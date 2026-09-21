@@ -75,6 +75,8 @@ private:
     static constexpr unsigned long kOpWriteMem = 0x802;
     static constexpr size_t kMaxChunk = 1024 * 1024;
 
+    bool ReadChunk(uintptr_t address, void *buffer, size_t len, bool quiet) const;
+
 public:
     KittyMemDriver() = default;
     ~KittyMemDriver() override;
